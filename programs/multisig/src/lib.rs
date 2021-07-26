@@ -184,7 +184,7 @@ pub struct CreateTransaction<'info> {
 pub struct Approve<'info> {
     #[account("multisig.owner_set_seqno == transaction.owner_set_seqno")]
     multisig: ProgramAccount<'info, Multisig>,
-    #[account(mut, belongs_to = multisig)]
+    #[account(mut, has_one = multisig)]
     transaction: ProgramAccount<'info, Transaction>,
     // One of the multisig owners. Checked in the handler.
     #[account(signer)]
@@ -211,7 +211,7 @@ pub struct ExecuteTransaction<'info> {
         &[multisig.nonce],
     ])]
     multisig_signer: AccountInfo<'info>,
-    #[account(mut, belongs_to = multisig)]
+    #[account(mut, has_one = multisig)]
     transaction: ProgramAccount<'info, Transaction>,
 }
 
@@ -253,9 +253,9 @@ impl From<&Transaction> for Instruction {
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone)]
 pub struct TransactionAccount {
-    pubkey: Pubkey,
-    is_signer: bool,
-    is_writable: bool,
+    pub pubkey: Pubkey,
+    pub is_signer: bool,
+    pub is_writable: bool,
 }
 
 impl From<TransactionAccount> for AccountMeta {
