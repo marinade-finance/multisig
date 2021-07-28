@@ -20,6 +20,7 @@ use borsh::ser::BorshSerialize;
 use clap::Clap;
 use expanded_path::ExpandedPath;
 use input_keypair::InputKeypair;
+use input_pubkey::InputPubkey;
 use multisig::instruction as multisig_instruction;
 use multisig::{accounts as multisig_accounts, TransactionInstruction};
 use serde::{Serialize, Serializer};
@@ -33,7 +34,7 @@ mod input_pubkey;
 struct Opts {
     /// Address of the Multisig program.
     #[clap(long, default_value = "H88LfRBiJLZ7wYkHGuwkKTaijfQxexq8JvzUndu7fyjL")]
-    multisig_program_id: Pubkey,
+    multisig_program_id: InputPubkey,
 
     /// The keypair to sign and pay with. [default: ~/.config/solana/id.json]
     #[clap(long, default_value = "~/.config/solana/id.json")]
@@ -118,7 +119,7 @@ impl CreateMultisigOpts {
 struct ProposeBinaryTransactionOpts {
     /// The multisig account whose owners should vote for this proposal.
     #[clap(long)]
-    multisig_address: Pubkey,
+    multisig_address: InputPubkey,
 
     #[clap(long)]
     data: ExpandedPath,
@@ -128,26 +129,26 @@ struct ProposeBinaryTransactionOpts {
 struct ProposeUpgradeOpts {
     /// The multisig account whose owners should vote for this proposal.
     #[clap(long)]
-    multisig_address: Pubkey,
+    multisig_address: InputPubkey,
 
     /// The program id of the program to upgrade.
     #[clap(long)]
-    program_address: Pubkey,
+    program_address: InputPubkey,
 
     /// The address that holds the new program data.
     #[clap(long)]
-    buffer_address: Pubkey,
+    buffer_address: InputPubkey,
 
     /// Account that will receive leftover funds from the buffer account.
     #[clap(long)]
-    spill_address: Pubkey,
+    spill_address: InputPubkey,
 }
 
 #[derive(Clap, Debug)]
 struct ProposeChangeMultisigOpts {
     /// The multisig account to modify.
     #[clap(long)]
-    multisig_address: Pubkey,
+    multisig_address: InputPubkey,
 
     // The fields below are the same as for `CreateMultisigOpts`, but we can't
     // just embed a `CreateMultisigOpts`, because Clap does not support that.
@@ -176,14 +177,14 @@ impl From<&ProposeChangeMultisigOpts> for CreateMultisigOpts {
 struct ShowMultisigOpts {
     /// The multisig account to display.
     #[clap(long)]
-    multisig_address: Pubkey,
+    multisig_address: InputPubkey,
 }
 
 #[derive(Clap, Debug)]
 struct ShowTransactionOpts {
     /// The transaction to display.
     #[clap(long)]
-    transaction_address: Pubkey,
+    transaction_address: InputPubkey,
 
     #[clap(long)]
     output_data: Option<ExpandedPath>,
@@ -194,11 +195,11 @@ struct ApproveOpts {
     /// The multisig account whose owners should vote for this proposal.
     // TODO: Can be omitted, we can obtain it from the transaction account.
     #[clap(long)]
-    multisig_address: Pubkey,
+    multisig_address: InputPubkey,
 
     /// The transaction to approve.
     #[clap(long)]
-    transaction_address: Pubkey,
+    transaction_address: InputPubkey,
 }
 
 #[derive(Clap, Debug)]
@@ -206,11 +207,11 @@ struct ExecuteTransactionOpts {
     /// The multisig account whose owners approved this transaction.
     // TODO: Can be omitted, we can obtain it from the transaction account.
     #[clap(long)]
-    multisig_address: Pubkey,
+    multisig_address: InputPubkey,
 
     /// The transaction to execute.
     #[clap(long)]
-    transaction_address: Pubkey,
+    transaction_address: InputPubkey,
 }
 
 fn print_output<Output: fmt::Display + Serialize>(as_json: bool, output: &Output) {
@@ -231,7 +232,7 @@ fn main() {
         Keypair::from_bytes(&opts.keypair_path.as_keypair().to_bytes()).unwrap(),
         CommitmentConfig::confirmed(),
     );
-    let program = client.program(opts.multisig_program_id);
+    let program = client.program(opts.multisig_program_id.as_pubkey());
 
     match opts.subcommand {
         SubCommand::CreateMultisig(cmd_opts) => {
@@ -423,11 +424,11 @@ impl fmt::Display for ShowMultisigOutput {
 
 fn show_multisig(program: Program, opts: ShowMultisigOpts) -> ShowMultisigOutput {
     let multisig: multisig::Multisig = program
-        .account(opts.multisig_address)
+        .account(opts.multisig_address.as_pubkey())
         .expect("Failed to read multisig state from account.");
 
     let (program_derived_address, _nonce) =
-        get_multisig_program_address(&program, &opts.multisig_address);
+        get_multisig_program_address(&program, &opts.multisig_address.as_pubkey());
 
     ShowMultisigOutput {
         multisig_program_derived_address: program_derived_address.into(),
@@ -575,7 +576,7 @@ impl fmt::Display for ShowTransactionOutput {
 
 fn show_transaction(program: Program, opts: ShowTransactionOpts) -> ShowTransactionOutput {
     let transaction: multisig::Transaction = program
-        .account(opts.transaction_address)
+        .account(opts.transaction_address.as_pubkey())
         .expect("Failed to read transaction data from account.");
 
     if let Some(output_data) = opts.output_data {
@@ -776,22 +777,26 @@ fn propose_binary_transaction(
     let instruction: Instruction =
         (&TransactionInstruction::try_from_slice(&data).expect("Transaction parse error")).into();
 
-    propose_instruction(program, opts.multisig_address, instruction)
+    propose_instruction(program, opts.multisig_address.as_pubkey(), instruction)
 }
 
 fn propose_upgrade(program: Program, opts: ProposeUpgradeOpts) -> ProposeInstructionOutput {
     let (program_derived_address, _nonce) =
-        get_multisig_program_address(&program, &opts.multisig_address);
+        get_multisig_program_address(&program, &opts.multisig_address.as_pubkey());
 
     let upgrade_instruction = bpf_loader_upgradeable::upgrade(
-        &opts.program_address,
-        &opts.buffer_address,
+        &opts.program_address.as_pubkey(),
+        &opts.buffer_address.as_pubkey(),
         // The upgrade authority is the multisig-derived program address.
         &program_derived_address,
-        &opts.spill_address,
+        &opts.spill_address.as_pubkey(),
     );
 
-    propose_instruction(program, opts.multisig_address, upgrade_instruction)
+    propose_instruction(
+        program,
+        opts.multisig_address.as_pubkey(),
+        upgrade_instruction,
+    )
 }
 
 fn propose_change_multisig(
@@ -803,14 +808,14 @@ fn propose_change_multisig(
     CreateMultisigOpts::from(&opts).validate_or_exit();
 
     let (program_derived_address, _nonce) =
-        get_multisig_program_address(&program, &opts.multisig_address);
+        get_multisig_program_address(&program, &opts.multisig_address.as_pubkey());
 
     let change_data = multisig_instruction::SetOwnersAndChangeThreshold {
         owners: opts.owners,
         threshold: opts.threshold,
     };
     let change_addrs = multisig_accounts::Auth {
-        multisig: opts.multisig_address,
+        multisig: opts.multisig_address.as_pubkey(),
         multisig_signer: program_derived_address,
     };
 
@@ -821,15 +826,19 @@ fn propose_change_multisig(
         accounts: change_addrs.to_account_metas(override_is_signer),
     };
 
-    propose_instruction(program, opts.multisig_address, change_instruction)
+    propose_instruction(
+        program,
+        opts.multisig_address.as_pubkey(),
+        change_instruction,
+    )
 }
 
 fn approve(program: Program, opts: ApproveOpts) {
     program
         .request()
         .accounts(multisig_accounts::Approve {
-            multisig: opts.multisig_address,
-            transaction: opts.transaction_address,
+            multisig: opts.multisig_address.as_pubkey(),
+            transaction: opts.transaction_address.as_pubkey(),
             // The owner that signs the multisig proposed transaction, should be
             // the public key that signs the entire approval transaction (which
             // is also the payer).
@@ -882,13 +891,13 @@ impl anchor_lang::ToAccountMetas for TransactionAccounts {
 
 fn execute_transaction(program: Program, opts: ExecuteTransactionOpts) {
     let (program_derived_address, _nonce) =
-        get_multisig_program_address(&program, &opts.multisig_address);
+        get_multisig_program_address(&program, &opts.multisig_address.as_pubkey());
 
     // The wrapped instruction can reference additional accounts, that we need
     // to specify in this `multisig::execute_transaction` instruction as well,
     // otherwise `invoke_signed` can fail in `execute_transaction`.
     let transaction: multisig::Transaction = program
-        .account(opts.transaction_address)
+        .account(opts.transaction_address.as_pubkey())
         .expect("Failed to read transaction data from account.");
     let tx_inner_accounts = TransactionAccounts {
         accounts: transaction.instruction.accounts,
@@ -898,9 +907,9 @@ fn execute_transaction(program: Program, opts: ExecuteTransactionOpts) {
     program
         .request()
         .accounts(multisig_accounts::ExecuteTransaction {
-            multisig: opts.multisig_address,
+            multisig: opts.multisig_address.as_pubkey(),
             multisig_signer: program_derived_address,
-            transaction: opts.transaction_address,
+            transaction: opts.transaction_address.as_pubkey(),
         })
         .accounts(tx_inner_accounts)
         .args(multisig_instruction::ExecuteTransaction)
