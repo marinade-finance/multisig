@@ -62,9 +62,9 @@ pub mod multisig {
         signers[owner_index] = true;
 
         let tx = &mut ctx.accounts.transaction;
-        tx.program_id = pid;
-        tx.accounts = accs;
-        tx.data = data;
+        tx.instruction.program_id = pid;
+        tx.instruction.accounts = accs;
+        tx.instruction.data = data;
         tx.signers = signers;
         tx.multisig = *ctx.accounts.multisig.to_account_info().key;
         tx.did_execute = false;
@@ -148,7 +148,7 @@ pub mod multisig {
         }
 
         // Execute the transaction signed by the multisig.
-        let mut ix: Instruction = (&*ctx.accounts.transaction).into();
+        let mut ix: Instruction = (&ctx.accounts.transaction.instruction).into();
         ix.accounts = ix
             .accounts
             .iter()
@@ -166,7 +166,7 @@ pub mod multisig {
         ];
         let signer = &[&seeds[..]];
         let accounts = ctx.remaining_accounts;
-        solana_program::program::invoke_signed(&ix, &accounts, signer)?;
+        solana_program::program::invoke_signed(&ix, accounts, signer)?;
 
         // Burn the transaction to ensure one time use.
         ctx.accounts.transaction.did_execute = true;
@@ -236,16 +236,22 @@ pub struct Multisig {
     pub owner_set_seqno: u32,
 }
 
-#[account]
-pub struct Transaction {
-    // The multisig account this transaction belongs to.
-    pub multisig: Pubkey,
+#[derive(Clone, AnchorDeserialize, AnchorSerialize)]
+pub struct TransactionInstruction {
     // Target program to execute against.
     pub program_id: Pubkey,
     // Accounts requried for the transaction.
     pub accounts: Vec<TransactionAccount>,
     // Instruction data for the transaction.
     pub data: Vec<u8>,
+}
+
+#[account]
+pub struct Transaction {
+    // The multisig account this transaction belongs to.
+    pub multisig: Pubkey,
+    // prerecorded instruction
+    pub instruction: TransactionInstruction,
     // signers[index] is true iff multisig.owners[index] signed the transaction.
     pub signers: Vec<bool>,
     // Boolean ensuring one time execution.
@@ -254,8 +260,8 @@ pub struct Transaction {
     pub owner_set_seqno: u32,
 }
 
-impl From<&Transaction> for Instruction {
-    fn from(tx: &Transaction) -> Instruction {
+impl From<&TransactionInstruction> for Instruction {
+    fn from(tx: &TransactionInstruction) -> Instruction {
         Instruction {
             program_id: tx.program_id,
             accounts: tx.accounts.iter().map(AccountMeta::from).collect(),

@@ -1,6 +1,6 @@
 use std::fmt;
 use std::fs::File;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -20,8 +20,8 @@ use borsh::ser::BorshSerialize;
 use clap::Clap;
 use expanded_path::ExpandedPath;
 use input_keypair::InputKeypair;
-use multisig::accounts as multisig_accounts;
 use multisig::instruction as multisig_instruction;
+use multisig::{accounts as multisig_accounts, TransactionInstruction};
 use serde::{Serialize, Serializer};
 
 mod expanded_path;
@@ -35,9 +35,9 @@ struct Opts {
     #[clap(long, default_value = "H88LfRBiJLZ7wYkHGuwkKTaijfQxexq8JvzUndu7fyjL")]
     multisig_program_id: Pubkey,
 
-    /// Transaction fee / account rent payer. [default: ~/.config/solana/id.json]
+    /// The keypair to sign and pay with. [default: ~/.config/solana/id.json]
     #[clap(long, default_value = "~/.config/solana/id.json")]
-    fee_payer: InputKeypair,
+    keypair_path: InputKeypair,
 
     /// Cluster to connect to (mainnet, testnet, devnet, localnet, or url).
     #[clap(long, default_value = "localnet")]
@@ -61,6 +61,9 @@ enum SubCommand {
 
     /// Show the details of a transaction.
     ShowTransaction(ShowTransactionOpts),
+
+    /// Propose binary transaction from file
+    ProposeBinaryTransaction(ProposeBinaryTransactionOpts),
 
     /// Propose replacing a program with that in the given buffer account.
     ProposeUpgrade(ProposeUpgradeOpts),
@@ -112,14 +115,20 @@ impl CreateMultisigOpts {
 }
 
 #[derive(Clap, Debug)]
-struct ProposeUpgradeOpts {
+struct ProposeBinaryTransactionOpts {
     /// The multisig account whose owners should vote for this proposal.
     #[clap(long)]
     multisig_address: Pubkey,
 
-    /// The keypair to sign with. [default: fee_payer]
     #[clap(long)]
-    signer: Option<InputKeypair>,
+    data: ExpandedPath,
+}
+
+#[derive(Clap, Debug)]
+struct ProposeUpgradeOpts {
+    /// The multisig account whose owners should vote for this proposal.
+    #[clap(long)]
+    multisig_address: Pubkey,
 
     /// The program id of the program to upgrade.
     #[clap(long)]
@@ -139,10 +148,6 @@ struct ProposeChangeMultisigOpts {
     /// The multisig account to modify.
     #[clap(long)]
     multisig_address: Pubkey,
-
-    /// The keypair to sign with. [default: fee_payer]
-    #[clap(long)]
-    signer: Option<InputKeypair>,
 
     // The fields below are the same as for `CreateMultisigOpts`, but we can't
     // just embed a `CreateMultisigOpts`, because Clap does not support that.
@@ -179,6 +184,9 @@ struct ShowTransactionOpts {
     /// The transaction to display.
     #[clap(long)]
     transaction_address: Pubkey,
+
+    #[clap(long)]
+    output_data: Option<ExpandedPath>,
 }
 
 #[derive(Clap, Debug)]
@@ -191,10 +199,6 @@ struct ApproveOpts {
     /// The transaction to approve.
     #[clap(long)]
     transaction_address: Pubkey,
-
-    /// The keypair to sign with. [default: fee_payer]
-    #[clap(long)]
-    signer: Option<InputKeypair>,
 }
 
 #[derive(Clap, Debug)]
@@ -224,7 +228,7 @@ fn main() {
 
     let client = Client::new_with_options(
         opts.cluster,
-        Keypair::from_bytes(&opts.fee_payer.as_keypair().to_bytes()).unwrap(),
+        Keypair::from_bytes(&opts.keypair_path.as_keypair().to_bytes()).unwrap(),
         CommitmentConfig::confirmed(),
     );
     let program = client.program(opts.multisig_program_id);
@@ -240,6 +244,10 @@ fn main() {
         }
         SubCommand::ShowTransaction(cmd_opts) => {
             let output = show_transaction(program, cmd_opts);
+            print_output(opts.output_json, &output);
+        }
+        SubCommand::ProposeBinaryTransaction(cmd_opts) => {
+            let output = propose_binary_transaction(program, cmd_opts);
             print_output(opts.output_json, &output);
         }
         SubCommand::ProposeUpgrade(cmd_opts) => {
@@ -462,7 +470,7 @@ enum ParsedInstruction {
         threshold: u64,
         owners: Vec<PubkeyBase58>,
     },
-    Unrecognized,
+    Unrecognized(Vec<u8>),
 }
 
 #[derive(Serialize)]
@@ -556,8 +564,8 @@ impl fmt::Display for ShowTransactionOutput {
                     writeln!(f, "      {}", owner_pubkey)?;
                 }
             }
-            ParsedInstruction::Unrecognized => {
-                writeln!(f, "  Unrecognized instruction.")?;
+            ParsedInstruction::Unrecognized(data) => {
+                writeln!(f, "  Unrecognized instruction: {}.", hex::encode(data))?;
             }
         }
 
@@ -569,6 +577,13 @@ fn show_transaction(program: Program, opts: ShowTransactionOpts) -> ShowTransact
     let transaction: multisig::Transaction = program
         .account(opts.transaction_address)
         .expect("Failed to read transaction data from account.");
+
+    if let Some(output_data) = opts.output_data {
+        File::create(output_data.as_path())
+            .expect("Can not create tx data file")
+            .write_all(&transaction.instruction.try_to_vec().unwrap())
+            .expect("Can not write tx data");
+    }
 
     // Also query the multisig, to get the owner public keys, so we can display
     // exactly who voted.
@@ -607,7 +622,7 @@ fn show_transaction(program: Program, opts: ShowTransactionOpts) -> ShowTransact
         }
     };
 
-    let instr = Instruction::from(&transaction);
+    let instr = Instruction::from(&transaction.instruction);
 
     let parsed_instr = if instr.program_id == bpf_loader_upgradeable::ID
         && bpf_loader_upgradeable::is_upgrade_instruction(&instr.data[..])
@@ -640,10 +655,10 @@ fn show_transaction(program: Program, opts: ShowTransactionOpts) -> ShowTransact
                 owners: instr.owners.iter().map(PubkeyBase58::from).collect(),
             }
         } else {
-            ParsedInstruction::Unrecognized
+            ParsedInstruction::Unrecognized(transaction.instruction.try_to_vec().unwrap())
         }
     } else {
-        ParsedInstruction::Unrecognized
+        ParsedInstruction::Unrecognized(transaction.instruction.try_to_vec().unwrap())
     };
 
     ShowTransactionOutput {
@@ -691,9 +706,11 @@ fn propose_instruction(
     // we can allocate an account of the right size.
     let dummy_tx = multisig::Transaction {
         multisig: multisig_address,
-        program_id: instruction.program_id,
-        accounts: accounts.clone(),
-        data: instruction.data.clone(),
+        instruction: TransactionInstruction {
+            program_id: instruction.program_id,
+            accounts: accounts.clone(),
+            data: instruction.data.clone(),
+        },
         signers: accounts.iter().map(|_| false).collect(),
         did_execute: false,
         owner_set_seqno: 0,
@@ -744,6 +761,22 @@ fn propose_instruction(
     ProposeInstructionOutput {
         transaction_address: transaction_account.pubkey().into(),
     }
+}
+
+fn propose_binary_transaction(
+    program: Program,
+    opts: ProposeBinaryTransactionOpts,
+) -> ProposeInstructionOutput {
+    let mut data = Vec::new();
+    File::open(opts.data.as_path())
+        .expect("Data file open error")
+        .read_to_end(&mut data)
+        .expect("Error reading transaction data");
+
+    let instruction: Instruction =
+        (&TransactionInstruction::try_from_slice(&data).expect("Transaction parse error")).into();
+
+    propose_instruction(program, opts.multisig_address, instruction)
 }
 
 fn propose_upgrade(program: Program, opts: ProposeUpgradeOpts) -> ProposeInstructionOutput {
@@ -858,8 +891,8 @@ fn execute_transaction(program: Program, opts: ExecuteTransactionOpts) {
         .account(opts.transaction_address)
         .expect("Failed to read transaction data from account.");
     let tx_inner_accounts = TransactionAccounts {
-        accounts: transaction.accounts,
-        program_id: transaction.program_id,
+        accounts: transaction.instruction.accounts,
+        program_id: transaction.instruction.program_id,
     };
 
     program
