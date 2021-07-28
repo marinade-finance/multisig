@@ -1,5 +1,8 @@
 use std::fmt;
+use std::fs::File;
+use std::io::Write;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use anchor_client::solana_sdk::bpf_loader_upgradeable;
 use anchor_client::solana_sdk::commitment_config::CommitmentConfig;
@@ -15,20 +18,26 @@ use anchor_lang::{Discriminator, InstructionData};
 use borsh::de::BorshDeserialize;
 use borsh::ser::BorshSerialize;
 use clap::Clap;
+use expanded_path::ExpandedPath;
+use input_keypair::InputKeypair;
 use multisig::accounts as multisig_accounts;
 use multisig::instruction as multisig_instruction;
 use serde::{Serialize, Serializer};
+
+mod expanded_path;
+mod input_keypair;
+mod input_pubkey;
 
 /// Multisig -- interact with a deployed Multisig program.
 #[derive(Clap, Debug)]
 struct Opts {
     /// Address of the Multisig program.
-    #[clap(long)]
+    #[clap(long, default_value = "H88LfRBiJLZ7wYkHGuwkKTaijfQxexq8JvzUndu7fyjL")]
     multisig_program_id: Pubkey,
 
-    /// The keypair to sign and pay with. [default: ~/.config/solana/id.json]
-    #[clap(long)]
-    keypair_path: Option<PathBuf>,
+    /// Transaction fee / account rent payer. [default: ~/.config/solana/id.json]
+    #[clap(long, default_value = "~/.config/solana/id.json")]
+    fee_payer: InputKeypair,
 
     /// Cluster to connect to (mainnet, testnet, devnet, localnet, or url).
     #[clap(long, default_value = "localnet")]
@@ -68,6 +77,15 @@ enum SubCommand {
 
 #[derive(Clap, Debug)]
 struct CreateMultisigOpts {
+    #[clap(long)]
+    multisig_account: Option<InputKeypair>, // random by default
+
+    #[clap(long)]
+    output_multisig_account: Option<ExpandedPath>,
+
+    #[clap(long)]
+    output_multisig_pda: Option<ExpandedPath>,
+
     /// How many signatures are needed to approve a transaction.
     #[clap(long)]
     threshold: u64,
@@ -99,6 +117,10 @@ struct ProposeUpgradeOpts {
     #[clap(long)]
     multisig_address: Pubkey,
 
+    /// The keypair to sign with. [default: fee_payer]
+    #[clap(long)]
+    signer: Option<InputKeypair>,
+
     /// The program id of the program to upgrade.
     #[clap(long)]
     program_address: Pubkey,
@@ -118,6 +140,10 @@ struct ProposeChangeMultisigOpts {
     #[clap(long)]
     multisig_address: Pubkey,
 
+    /// The keypair to sign with. [default: fee_payer]
+    #[clap(long)]
+    signer: Option<InputKeypair>,
+
     // The fields below are the same as for `CreateMultisigOpts`, but we can't
     // just embed a `CreateMultisigOpts`, because Clap does not support that.
     /// How many signatures are needed to approve a transaction.
@@ -134,6 +160,9 @@ impl From<&ProposeChangeMultisigOpts> for CreateMultisigOpts {
         CreateMultisigOpts {
             threshold: opts.threshold,
             owners: opts.owners.clone(),
+            multisig_account: None,
+            output_multisig_account: None,
+            output_multisig_pda: None,
         }
     }
 }
@@ -162,6 +191,10 @@ struct ApproveOpts {
     /// The transaction to approve.
     #[clap(long)]
     transaction_address: Pubkey,
+
+    /// The keypair to sign with. [default: fee_payer]
+    #[clap(long)]
+    signer: Option<InputKeypair>,
 }
 
 #[derive(Clap, Debug)]
@@ -174,14 +207,6 @@ struct ExecuteTransactionOpts {
     /// The transaction to execute.
     #[clap(long)]
     transaction_address: Pubkey,
-}
-
-/// Resolve ~/.config/solana/id.json.
-fn get_default_keypair_path() -> PathBuf {
-    let home = std::env::var("HOME").expect("Expected $HOME to be set.");
-    let mut path = PathBuf::from(home);
-    path.push(".config/solana/id.json");
-    path
 }
 
 fn print_output<Output: fmt::Display + Serialize>(as_json: bool, output: &Output) {
@@ -197,16 +222,11 @@ fn print_output<Output: fmt::Display + Serialize>(as_json: bool, output: &Output
 fn main() {
     let opts = Opts::parse();
 
-    let payer_keypair_path = match opts.keypair_path {
-        Some(path) => path,
-        None => get_default_keypair_path(),
-    };
-    let payer = read_keypair_file(&payer_keypair_path).expect(&format!(
-        "Failed to read key pair from {:?}.",
-        payer_keypair_path
-    ));
-
-    let client = Client::new_with_options(opts.cluster, payer, CommitmentConfig::confirmed());
+    let client = Client::new_with_options(
+        opts.cluster,
+        Keypair::from_bytes(&opts.fee_payer.as_keypair().to_bytes()).unwrap(),
+        CommitmentConfig::confirmed(),
+    );
     let program = client.program(opts.multisig_program_id);
 
     match opts.subcommand {
@@ -264,7 +284,7 @@ impl From<Pubkey> for PubkeyBase58 {
 
 impl From<&Pubkey> for PubkeyBase58 {
     fn from(pk: &Pubkey) -> PubkeyBase58 {
-        PubkeyBase58(pk.clone())
+        PubkeyBase58(*pk)
     }
 }
 
@@ -293,12 +313,23 @@ fn create_multisig(program: Program, opts: CreateMultisigOpts) -> CreateMultisig
 
     // Before we can make the Multisig program initialize a new multisig
     // account, we need to have a program-owned account to used for that.
-    // We generate a temporary key pair for this; after the account is
+    // We may generate a temporary key pair for this; after the account is
     // constructed, we no longer need to manipulate it (it is managed by the
     // Multisig program). We don't save the private key because the account will
     // be owned by the Multisig program later anyway. Its funds will be locked
     // up forever.
-    let multisig_account = Keypair::new();
+    let multisig_account = if let Some(multisig_account) = opts.multisig_account {
+        multisig_account.as_keypair()
+    } else {
+        Arc::new(Keypair::new())
+    };
+
+    if let Some(output_multisig_account) = opts.output_multisig_account {
+        File::create(output_multisig_account.as_path())
+            .unwrap()
+            .write_all(multisig_account.pubkey().to_string().as_bytes()) // base58 representation
+            .unwrap();
+    }
 
     // The Multisig program will sign transactions on behalf of a derived
     // account. Return this derived account, so it can be used to set as e.g.
@@ -308,6 +339,13 @@ fn create_multisig(program: Program, opts: CreateMultisigOpts) -> CreateMultisig
     // deriving its program address.
     let (program_derived_address, nonce) =
         get_multisig_program_address(&program, &multisig_account.pubkey());
+
+    if let Some(output_multisig_pda) = opts.output_multisig_pda {
+        File::create(output_multisig_pda.as_path())
+            .unwrap()
+            .write_all(program_derived_address.to_string().as_bytes()) // base58 representation
+            .unwrap();
+    }
 
     program
         .request()
@@ -328,7 +366,7 @@ fn create_multisig(program: Program, opts: CreateMultisigOpts) -> CreateMultisig
             &program.id(),
         ))
         // Creating the account must be signed by the account itself.
-        .signer(&multisig_account)
+        .signer(multisig_account.as_ref())
         .accounts(multisig_accounts::CreateMultisig {
             multisig: multisig_account.pubkey(),
             rent: sysvar::rent::ID,
@@ -336,7 +374,7 @@ fn create_multisig(program: Program, opts: CreateMultisigOpts) -> CreateMultisig
         .args(multisig_instruction::CreateMultisig {
             owners: opts.owners,
             threshold: opts.threshold,
-            nonce: nonce,
+            nonce,
         })
         .send()
         .expect("Failed to send transaction.");
@@ -611,7 +649,7 @@ fn show_transaction(program: Program, opts: ShowTransactionOpts) -> ShowTransact
     ShowTransactionOutput {
         multisig_address: transaction.multisig.into(),
         did_execute: transaction.did_execute,
-        signers: signers,
+        signers,
         instruction: instr,
         parsed_instruction: parsed_instr,
     }

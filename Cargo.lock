@@ -583,11 +583,13 @@ version = "0.0.0"
 dependencies = [
  "anchor-client",
  "anchor-lang",
+ "anyhow",
  "borsh",
  "clap 3.0.0-beta.2",
  "multisig",
  "serde",
  "serde_json",
+ "shellexpand",
 ]
 
 [[package]]
@@ -2739,6 +2741,15 @@ dependencies = [
  "digest 0.9.0",
  "keccak",
  "opaque-debug 0.3.0",
+]
+
+[[package]]
+name = "shellexpand"
+version = "2.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "83bdb7831b2d85ddf4a7b148aa19d0587eddbe8671a436b7bd1182eaad0f2829"
+dependencies = [
+ "dirs-next",
 ]
 
 [[package]]
