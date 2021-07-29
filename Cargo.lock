@@ -3859,6 +3859,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "tx-creator"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "borsh",
+ "clap 3.0.0-beta.2",
+ "multisig",
+ "serde",
+ "serde_json",
+ "shellexpand",
+ "solana-sdk",
+]
+
+[[package]]
 name = "typenum"
 version = "1.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

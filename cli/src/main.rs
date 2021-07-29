@@ -1,17 +1,16 @@
 use std::fmt;
 use std::fs::File;
 use std::io::{Read, Write};
-use std::path::PathBuf;
 use std::sync::Arc;
 
-use anchor_client::solana_sdk::bpf_loader_upgradeable;
-use anchor_client::solana_sdk::commitment_config::CommitmentConfig;
-use anchor_client::solana_sdk::instruction::Instruction;
-use anchor_client::solana_sdk::pubkey::Pubkey;
-use anchor_client::solana_sdk::signature::read_keypair_file;
-use anchor_client::solana_sdk::signature::{Keypair, Signer};
-use anchor_client::solana_sdk::system_instruction;
-use anchor_client::solana_sdk::sysvar;
+use anchor_client::solana_sdk::{
+    bpf_loader_upgradeable,
+    commitment_config::CommitmentConfig,
+    instruction::Instruction,
+    pubkey::Pubkey,
+    signature::{Keypair, Signer},
+    system_instruction, sysvar,
+};
 use anchor_client::{Client, Cluster, Program};
 use anchor_lang::prelude::{AccountMeta, ToAccountMetas};
 use anchor_lang::{Discriminator, InstructionData};
@@ -123,6 +122,9 @@ struct ProposeBinaryTransactionOpts {
 
     #[clap(long)]
     data: ExpandedPath,
+
+    #[clap(long)]
+    transaction_account: Option<InputKeypair>,
 }
 
 #[derive(Clap, Debug)]
@@ -140,8 +142,11 @@ struct ProposeUpgradeOpts {
     buffer_address: InputPubkey,
 
     /// Account that will receive leftover funds from the buffer account.
-    #[clap(long)]
+    #[clap(long, default_value = "~/.config/solana/id.json")]
     spill_address: InputPubkey,
+
+    #[clap(long)]
+    transaction_account: Option<InputKeypair>,
 }
 
 #[derive(Clap, Debug)]
@@ -159,6 +164,9 @@ struct ProposeChangeMultisigOpts {
     /// The public keys of the multisig owners, who can sign transactions.
     #[clap(long = "owner", required = true)]
     owners: Vec<Pubkey>,
+
+    #[clap(long)]
+    transaction_account: Option<InputKeypair>,
 }
 
 impl From<&ProposeChangeMultisigOpts> for CreateMultisigOpts {
@@ -686,6 +694,7 @@ impl fmt::Display for ProposeInstructionOutput {
 fn propose_instruction(
     program: Program,
     multisig_address: Pubkey,
+    transaction_account: Arc<Keypair>,
     instruction: Instruction,
 ) -> ProposeInstructionOutput {
     // The Multisig program expects `multisig::TransactionAccount` instead of
@@ -696,12 +705,6 @@ fn propose_instruction(
         .iter()
         .map(multisig::TransactionAccount::from)
         .collect();
-
-    // The transaction is stored by the Multisig program in yet another account,
-    // that we create just for this transaction. We don't save the private key
-    // because the account will be owned by the multisig program later; its
-    // funds will be locked forever.
-    let transaction_account = Keypair::new();
 
     // Build the data that the account will hold, just to measure its size, so
     // we can allocate an account of the right size.
@@ -741,7 +744,7 @@ fn propose_instruction(
             &program.id(),
         ))
         // Creating the account must be signed by the account itself.
-        .signer(&transaction_account)
+        .signer(transaction_account.as_ref())
         .accounts(multisig_accounts::CreateTransaction {
             multisig: multisig_address,
             transaction: transaction_account.pubkey(),
@@ -777,7 +780,14 @@ fn propose_binary_transaction(
     let instruction: Instruction =
         (&TransactionInstruction::try_from_slice(&data).expect("Transaction parse error")).into();
 
-    propose_instruction(program, opts.multisig_address.as_pubkey(), instruction)
+    propose_instruction(
+        program,
+        opts.multisig_address.as_pubkey(),
+        opts.transaction_account
+            .as_ref()
+            .map_or_else(|| Arc::new(Keypair::new()), InputKeypair::as_keypair),
+        instruction,
+    )
 }
 
 fn propose_upgrade(program: Program, opts: ProposeUpgradeOpts) -> ProposeInstructionOutput {
@@ -795,6 +805,9 @@ fn propose_upgrade(program: Program, opts: ProposeUpgradeOpts) -> ProposeInstruc
     propose_instruction(
         program,
         opts.multisig_address.as_pubkey(),
+        opts.transaction_account
+            .as_ref()
+            .map_or_else(|| Arc::new(Keypair::new()), InputKeypair::as_keypair),
         upgrade_instruction,
     )
 }
@@ -829,6 +842,9 @@ fn propose_change_multisig(
     propose_instruction(
         program,
         opts.multisig_address.as_pubkey(),
+        opts.transaction_account
+            .as_ref()
+            .map_or_else(|| Arc::new(Keypair::new()), InputKeypair::as_keypair),
         change_instruction,
     )
 }

@@ -2,4 +2,5 @@
 members = [
     "programs/*",
     "cli",
+    "tx-creator",
 ]
