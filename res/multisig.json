@@ -98,6 +98,33 @@
       "args": []
     },
     {
+      "name": "setOwnersAndChangeThreshold",
+      "accounts": [
+        {
+          "name": "multisig",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "multisigSigner",
+          "isMut": false,
+          "isSigner": true
+        }
+      ],
+      "args": [
+        {
+          "name": "owners",
+          "type": {
+            "vec": "publicKey"
+          }
+        },
+        {
+          "name": "threshold",
+          "type": "u64"
+        }
+      ]
+    },
+    {
       "name": "setOwners",
       "accounts": [
         {
@@ -200,20 +227,10 @@
             "type": "publicKey"
           },
           {
-            "name": "programId",
-            "type": "publicKey"
-          },
-          {
-            "name": "accounts",
+            "name": "instruction",
             "type": {
-              "vec": {
-                "defined": "TransactionAccount"
-              }
+              "defined": "TransactionInstruction"
             }
-          },
-          {
-            "name": "data",
-            "type": "bytes"
           },
           {
             "name": "signers",
@@ -234,6 +251,30 @@
     }
   ],
   "types": [
+    {
+      "name": "TransactionInstruction",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "programId",
+            "type": "publicKey"
+          },
+          {
+            "name": "accounts",
+            "type": {
+              "vec": {
+                "defined": "TransactionAccount"
+              }
+            }
+          },
+          {
+            "name": "data",
+            "type": "bytes"
+          }
+        ]
+      }
+    },
     {
       "name": "TransactionAccount",
       "type": {
