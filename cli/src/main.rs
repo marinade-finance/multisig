@@ -20,8 +20,8 @@ use clap::Clap;
 use expanded_path::ExpandedPath;
 use input_keypair::InputKeypair;
 use input_pubkey::InputPubkey;
-use multisig::instruction as multisig_instruction;
 use multisig::{accounts as multisig_accounts, TransactionInstruction};
+use multisig::{instruction as multisig_instruction, Transaction};
 use serde::{Serialize, Serializer};
 
 mod expanded_path;
@@ -200,14 +200,12 @@ struct ShowTransactionOpts {
 
 #[derive(Clap, Debug)]
 struct ApproveOpts {
-    /// The multisig account whose owners should vote for this proposal.
-    // TODO: Can be omitted, we can obtain it from the transaction account.
-    #[clap(long)]
-    multisig_address: InputPubkey,
-
     /// The transaction to approve.
     #[clap(long)]
     transaction_address: InputPubkey,
+
+    #[clap(long)]
+    data: Option<ExpandedPath>,
 }
 
 #[derive(Clap, Debug)]
@@ -850,10 +848,23 @@ fn propose_change_multisig(
 }
 
 fn approve(program: Program, opts: ApproveOpts) {
+    let transaction: Transaction = program
+        .account(opts.transaction_address.as_pubkey())
+        .expect("Can not read transaction");
+    if let Some(data) = opts.data {
+        let mut test = Vec::new();
+        File::open(data.as_path())
+            .expect("Can not open data file")
+            .read_to_end(&mut test)
+            .expect("Can not read data file");
+        if transaction.instruction.try_to_vec().unwrap() != test {
+            panic!("Transaction data does not match");
+        }
+    }
     program
         .request()
         .accounts(multisig_accounts::Approve {
-            multisig: opts.multisig_address.as_pubkey(),
+            multisig: transaction.multisig,
             transaction: opts.transaction_address.as_pubkey(),
             // The owner that signs the multisig proposed transaction, should be
             // the public key that signs the entire approval transaction (which
