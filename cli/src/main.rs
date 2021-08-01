@@ -21,7 +21,7 @@ use expanded_path::ExpandedPath;
 use input_keypair::InputKeypair;
 use input_pubkey::InputPubkey;
 use multisig::{accounts as multisig_accounts, TransactionInstruction};
-use multisig::{instruction as multisig_instruction, Transaction};
+use multisig::{instruction as multisig_instruction, ErrorCode, Transaction};
 use serde::{Serialize, Serializer};
 
 mod expanded_path;
@@ -695,6 +695,14 @@ fn propose_instruction(
     transaction_account: Arc<Keypair>,
     instruction: Instruction,
 ) -> ProposeInstructionOutput {
+
+
+    // get multisig_instance data
+    let multisig_data: multisig::Multisig = program
+        .account(multisig_address)
+        .expect("Failed to read multisig state from account.");
+
+
     // The Multisig program expects `multisig::TransactionAccount` instead of
     // `solana_sdk::AccountMeta`. The types are structurally identical,
     // but not nominally, so we need to convert these.
@@ -706,6 +714,10 @@ fn propose_instruction(
 
     // Build the data that the account will hold, just to measure its size, so
     // we can allocate an account of the right size.
+
+    let mut signers_flags = Vec::new(); // boolean array, who signed
+    signers_flags.resize(multisig_data.owners.len(), false);
+
     let dummy_tx = multisig::Transaction {
         multisig: multisig_address,
         instruction: TransactionInstruction {
@@ -713,7 +725,7 @@ fn propose_instruction(
             accounts: accounts.clone(),
             data: instruction.data.clone(),
         },
-        signers: accounts.iter().map(|_| false).collect(),
+        signers: signers_flags,
         did_execute: false,
         owner_set_seqno: 0,
     };
@@ -724,7 +736,11 @@ fn propose_instruction(
         .try_to_vec()
         .expect("Failed to serialize dummy transaction.");
     account_bytes.extend(&multisig::Transaction::discriminator()[..]);
-
+    println!(
+        "create tx account owned by {}, size {}",
+        &program.id(),
+        account_bytes.len()
+    );
     program
         .request()
         // Create the program-owned account that will hold the transaction data,
