@@ -237,6 +237,8 @@ fn print_output<Output: fmt::Display + Serialize>(as_json: bool, output: &Output
 fn main() {
     let opts = Opts::parse();
 
+    println!("RPC: {:?}", &opts.cluster.url());
+
     let client = Client::new_with_options(
         opts.cluster,
         Keypair::from_bytes(&opts.keypair_path.as_keypair().to_bytes()).unwrap(),

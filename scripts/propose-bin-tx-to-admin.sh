@@ -7,7 +7,7 @@
 #
 MULTISIG_3_ADMIN=7mSA2bgzmUCi4wh16NQEfT76XMqJULni6sheZRCjcyx7
 set -ex
-./target/debug/multisig --cluster mainnet propose-binary-transaction \
+./target/debug/multisig --cluster http://marinade.rpcpool.com propose-binary-transaction \
     --multisig-address $MULTISIG_3_ADMIN \
     --data $1 \
     ${@: 3}
