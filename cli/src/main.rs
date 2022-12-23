@@ -567,14 +567,17 @@ impl fmt::Display for ShowTransactionOutput {
             ParsedInstruction::MultisigChange { threshold, owners } => {
                 writeln!(
                     f,
-                    "  This is a multisig::set_owners_and_change_threshold instruction."
+                    "  This is a multisig::set_owners{} instruction.",
+                    if *threshold != u64::MAX {"_and_change_threshold"} else {""}
                 )?;
-                writeln!(
-                    f,
-                    "    New threshold: {} out of {}",
-                    threshold,
-                    owners.len()
-                )?;
+                if *threshold != u64::MAX {
+                    writeln!(
+                        f,
+                        "    New threshold: {} out of {}",
+                        threshold,
+                        owners.len()
+                    )?;
+                }
                 writeln!(f, "    New owners:")?;
                 for owner_pubkey in owners {
                     writeln!(f, "      {}", owner_pubkey)?;
@@ -678,7 +681,7 @@ fn show_transaction(program: Program, opts: ShowTransactionOpts) -> ShowTransact
                 multisig_instruction::SetOwners::try_from_slice(&instr.data[8..])
             {
                 ParsedInstruction::MultisigChange {
-                    threshold: 0,
+                    threshold: u64::MAX,
                     owners: instr.owners.iter().map(PubkeyBase58::from).collect(),
                 }
             } else {
