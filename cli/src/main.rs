@@ -661,14 +661,28 @@ fn show_transaction(program: Program, opts: ShowTransactionOpts) -> ShowTransact
     // hard-code the tag here (it is stable as long as the namespace and
     // function name do not change).
     if instr.program_id == program.id()
-        && &instr.data[..8] == &[122, 49, 168, 177, 231, 28, 167, 204]
     {
-        if let Ok(instr) =
-            multisig_instruction::SetOwnersAndChangeThreshold::try_from_slice(&instr.data[8..])
-        {
-            ParsedInstruction::MultisigChange {
-                threshold: instr.threshold,
-                owners: instr.owners.iter().map(PubkeyBase58::from).collect(),
+        if &instr.data[..8] == &[122, 49, 168, 177, 231, 28, 167, 204] {
+            if let Ok(instr) =
+                multisig_instruction::SetOwnersAndChangeThreshold::try_from_slice(&instr.data[8..])
+            {
+                ParsedInstruction::MultisigChange {
+                    threshold: instr.threshold,
+                    owners: instr.owners.iter().map(PubkeyBase58::from).collect(),
+                }
+            } else {
+                ParsedInstruction::Unrecognized(transaction.instruction.try_to_vec().unwrap())
+            }
+        } else if &instr.data[..8] == &[134, 145, 42, 122, 94, 64, 76, 218] {
+            if let Ok(instr) =
+                multisig_instruction::SetOwners::try_from_slice(&instr.data[8..])
+            {
+                ParsedInstruction::MultisigChange {
+                    threshold: 0,
+                    owners: instr.owners.iter().map(PubkeyBase58::from).collect(),
+                }
+            } else {
+                ParsedInstruction::Unrecognized(transaction.instruction.try_to_vec().unwrap())
             }
         } else {
             ParsedInstruction::Unrecognized(transaction.instruction.try_to_vec().unwrap())
@@ -704,13 +718,10 @@ pub(crate) fn propose_instruction(
     transaction_account: Arc<Keypair>,
     instruction: Instruction,
 ) -> ProposeInstructionOutput {
-
-
     // get multisig_instance data
     let multisig_data: multisig::Multisig = program
         .account(multisig_address)
         .expect("Failed to read multisig state from account.");
-
 
     // The Multisig program expects `multisig::TransactionAccount` instead of
     // `solana_sdk::AccountMeta`. The types are structurally identical,

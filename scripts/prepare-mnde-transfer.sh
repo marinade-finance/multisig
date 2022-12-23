@@ -11,7 +11,10 @@
 #
 MULTISIG_4_TREASURY=9aN4drMhmd8AX3eRdYvH1gbZiPmwgGJfjvneCECF97HD
 set -ex
-./target/debug/multisig --cluster http://marinade.rpcpool.com propose-spl-token-transfer \
+./target/debug/multisig \
+    --cluster https://api.rpcpool.com/6eb35429-0614-46be-9c2b-565fef71891b \
+    --keypair-path /home/aankor/.config/solana/admin.json \
+    propose-spl-token-transfer \
     --amount $1 \
     --from GR1LBT4cU89cJWE74CP6BsJTf2kriQ9TX59tbDsfxgSi \
     --to $2 \
