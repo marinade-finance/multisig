@@ -482,6 +482,11 @@ enum ParsedInstruction {
         buffer_address: PubkeyBase58,
         spill_address: PubkeyBase58,
     },
+    BpfLoaderSetAuthority {
+        account: PubkeyBase58,
+        present_authority: PubkeyBase58,
+        new_authority: PubkeyBase58,
+    },
     MultisigChange {
         threshold: u64,
         owners: Vec<PubkeyBase58>,
@@ -563,6 +568,19 @@ impl fmt::Display for ShowTransactionOutput {
                 writeln!(f, "    Program data address:    {}", program_data_address)?;
                 writeln!(f, "    Buffer with new program: {}", buffer_address)?;
                 writeln!(f, "    Spill address:           {}", spill_address)?;
+            },
+            ParsedInstruction::BpfLoaderSetAuthority {
+                account,
+                present_authority,
+                new_authority,
+            } => {
+                writeln!(
+                    f,
+                    "  This is a bpf_loader_upgradeable::set_authority instruction."
+                )?;
+                writeln!(f, "    Account (program or buffer): {}", account)?;
+                writeln!(f, "    Present authority:           {}", present_authority)?;
+                writeln!(f, "    New authority:               {}", new_authority)?;
             }
             ParsedInstruction::MultisigChange { threshold, owners } => {
                 writeln!(
@@ -640,16 +658,24 @@ fn show_transaction(program: Program, opts: ShowTransactionOpts) -> ShowTransact
 
     let instr = Instruction::from(&transaction.instruction);
 
-    let parsed_instr = if instr.program_id == bpf_loader_upgradeable::ID
-        && bpf_loader_upgradeable::is_upgrade_instruction(&instr.data[..])
-    {
-        // Account meaning, according to
-        // https://docs.rs/solana-sdk/1.5.19/solana_sdk/loader_upgradeable_instruction/enum.UpgradeableLoaderInstruction.html#variant.Upgrade
-        ParsedInstruction::BpfLoaderUpgrade {
-            program_data_address: instr.accounts[0].pubkey.into(),
-            program_to_upgrade: instr.accounts[1].pubkey.into(),
-            buffer_address: instr.accounts[2].pubkey.into(),
-            spill_address: instr.accounts[3].pubkey.into(),
+    let parsed_instr = if instr.program_id == bpf_loader_upgradeable::ID {
+        if bpf_loader_upgradeable::is_upgrade_instruction(&instr.data) {
+            // Account meaning, according to
+            // https://docs.rs/solana-sdk/1.5.19/solana_sdk/loader_upgradeable_instruction/enum.UpgradeableLoaderInstruction.html#variant.Upgrade
+            ParsedInstruction::BpfLoaderUpgrade {
+                program_data_address: instr.accounts[0].pubkey.into(),
+                program_to_upgrade: instr.accounts[1].pubkey.into(),
+                buffer_address: instr.accounts[2].pubkey.into(),
+                spill_address: instr.accounts[3].pubkey.into(),
+            }
+        } else if bpf_loader_upgradeable::is_set_authority_instruction(&instr.data) {
+            ParsedInstruction::BpfLoaderSetAuthority {
+                account: instr.accounts[0].pubkey.into(),
+                present_authority: instr.accounts[1].pubkey.into(),
+                new_authority: instr.accounts[2].pubkey.into(),
+            }
+        } else {
+            ParsedInstruction::Unrecognized(transaction.instruction.try_to_vec().unwrap())
         }
     } else
     // Try to deserialize the known multisig instructions. The instruction
@@ -660,8 +686,7 @@ fn show_transaction(program: Program, opts: ShowTransactionOpts) -> ShowTransact
     // currently (https://github.com/project-serum/anchor/issues/243), so we
     // hard-code the tag here (it is stable as long as the namespace and
     // function name do not change).
-    if instr.program_id == program.id()
-    {
+    if instr.program_id == program.id() {
         if &instr.data[..8] == &[122, 49, 168, 177, 231, 28, 167, 204] {
             if let Ok(instr) =
                 multisig_instruction::SetOwnersAndChangeThreshold::try_from_slice(&instr.data[8..])
@@ -674,9 +699,7 @@ fn show_transaction(program: Program, opts: ShowTransactionOpts) -> ShowTransact
                 ParsedInstruction::Unrecognized(transaction.instruction.try_to_vec().unwrap())
             }
         } else if &instr.data[..8] == &[134, 145, 42, 122, 94, 64, 76, 218] {
-            if let Ok(instr) =
-                multisig_instruction::SetOwners::try_from_slice(&instr.data[8..])
-            {
+            if let Ok(instr) = multisig_instruction::SetOwners::try_from_slice(&instr.data[8..]) {
                 ParsedInstruction::MultisigChange {
                     threshold: 0,
                     owners: instr.owners.iter().map(PubkeyBase58::from).collect(),
